@@ -93,5 +93,5 @@ class UV_PT_quad_rectifier(bpy.types.Panel):
         url_op = box_author.operator("wm.url_open", text="YouTube Channel", icon='URL')
         url_op.url = _ADDON_INFO["youtube_channel"]
 
-        site_op = box_author.operator("wm.url_open", text="Team Apricot", icon='GLOBE')
+        site_op = box_author.operator("wm.url_open", text="Team Apricot", icon='WORLD')
         site_op.url = _ADDON_INFO["website"]
