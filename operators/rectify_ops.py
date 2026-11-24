@@ -5,16 +5,16 @@ from ..core.rectifier import (
     get_selected_quads,
     get_connected_islands,
     rectify_connected_island_grid,
-    fit_uv_loops_to_canvas,
+    pack_islands_to_canvas,
     is_loop_uv_selected,
 )
 
 
 class UV_OT_quad_rectifier(bpy.types.Operator):
-    """Endereza caras quad seleccionadas en una cuadrícula continua ortogonal sin huecos ni diagonales"""
+    """Endereza caras quad seleccionadas en una cuadrícula continua ortogonal y acomoda al canvas sin superposiciones"""
     bl_idname = "uv.quad_rectifier"
     bl_label = "Enderezar Cuadrícula UV"
-    bl_description = "Alinea y une caras quad seleccionadas en una cuadrícula continua ortogonal perfecta sin huecos"
+    bl_description = "Alinea y une caras quad seleccionadas en una cuadrícula continua perfecta y las acomoda al canvas sin montarse"
     bl_options = {'REGISTER', 'UNDO'}
 
     shape_mode: bpy.props.EnumProperty(
@@ -29,7 +29,7 @@ class UV_OT_quad_rectifier(bpy.types.Operator):
 
     fit_to_canvas: bpy.props.BoolProperty(
         name="Ajustar al Canvas (0-1)",
-        description="Escala y centra automáticamente las UVs rectificadas dentro del espacio [0, 1] de la textura",
+        description="Empaqueta y acomoda automáticamente las islas en el canvas [0, 1] sin superponerse",
         default=True,
     )
 
@@ -42,10 +42,13 @@ class UV_OT_quad_rectifier(bpy.types.Operator):
         precision=3,
     )
 
-    keep_aspect: bpy.props.BoolProperty(
-        name="Mantener Proporción",
-        description="Mantiene la proporción uniforme al escalar para no deformar las celdas cuadradas",
-        default=True,
+    island_spacing: bpy.props.FloatProperty(
+        name="Espaciado entre Islas",
+        description="Separación entre islas para que no se toquen ni se monten",
+        default=0.02,
+        min=0.001,
+        max=0.2,
+        precision=3,
     )
 
     @classmethod
@@ -88,7 +91,6 @@ class UV_OT_quad_rectifier(bpy.types.Operator):
             total_islands += len(islands)
 
             # 2. Rectificar cada isla conectada propagando la cuadrícula continua
-            all_processed_loops = []
             for island in islands:
                 rectify_connected_island_grid(
                     island_faces=island,
@@ -96,16 +98,14 @@ class UV_OT_quad_rectifier(bpy.types.Operator):
                     shape_mode=self.shape_mode,
                     active_face=active_face,
                 )
-                for f in island:
-                    all_processed_loops.extend(f.loops)
 
-            # 3. Acomodar opcionalmente al Canvas [0, 1]
-            if self.fit_to_canvas and all_processed_loops:
-                fit_uv_loops_to_canvas(
-                    uv_loops=all_processed_loops,
+            # 3. Empaquetar y acomodar todas las islas en el canvas [0, 1] sin montarse
+            if self.fit_to_canvas and islands:
+                pack_islands_to_canvas(
+                    islands=islands,
                     uv_layer=uv_layer,
                     margin=self.canvas_margin,
-                    keep_aspect=self.keep_aspect,
+                    spacing=self.island_spacing,
                 )
 
             bmesh.update_edit_mesh(obj.data)
@@ -118,9 +118,9 @@ class UV_OT_quad_rectifier(bpy.types.Operator):
             )
             return {'CANCELLED'}
 
-        msg = f"Quad UV Rectifier: {total_quads} quads unidos en {total_islands} cuadrícula(s)"
+        msg = f"Quad UV Rectifier: {total_quads} quads procesados en {total_islands} isla(s)"
         if self.fit_to_canvas:
-            msg += " y ajustados al canvas [0, 1]"
+            msg += " acomodados al canvas [0, 1] sin superposiciones"
         msg += "."
         if total_ignored > 0:
             msg += f" ({total_ignored} caras no-quad ignoradas)."
@@ -130,10 +130,10 @@ class UV_OT_quad_rectifier(bpy.types.Operator):
 
 
 class UV_OT_fit_to_canvas(bpy.types.Operator):
-    """Escala y centra las caras UV seleccionadas dentro del canvas [0, 1]"""
+    """Empaqueta y acomoda las islas UV seleccionadas dentro del canvas [0, 1] sin superponerse"""
     bl_idname = "uv.fit_to_canvas"
     bl_label = "Ajustar al Canvas UV"
-    bl_description = "Escala y centra la selección UV dentro del espacio [0, 1] de la textura"
+    bl_description = "Acomoda y empaqueta las islas UV seleccionadas dentro del canvas [0, 1] sin montarse"
     bl_options = {'REGISTER', 'UNDO'}
 
     margin: bpy.props.FloatProperty(
@@ -145,10 +145,13 @@ class UV_OT_fit_to_canvas(bpy.types.Operator):
         precision=3,
     )
 
-    keep_aspect: bpy.props.BoolProperty(
-        name="Mantener Proporción",
-        description="Mantiene la proporción uniforme para no deformar las proporciones",
-        default=True,
+    spacing: bpy.props.FloatProperty(
+        name="Espaciado entre Islas",
+        description="Separación entre islas para que no se toquen ni se monten",
+        default=0.02,
+        min=0.001,
+        max=0.2,
+        precision=3,
     )
 
     @classmethod
@@ -170,35 +173,36 @@ class UV_OT_fit_to_canvas(bpy.types.Operator):
             self.report({'WARNING'}, "No hay mallas activas en modo edición.")
             return {'CANCELLED'}
 
-        total_loops = 0
+        total_islands = 0
 
         for obj in edit_objects:
             bm = bmesh.from_edit_mesh(obj.data)
             uv_layer = bm.loops.layers.uv.verify()
 
-            selected_loops = []
+            selected_faces = []
             for face in bm.faces:
                 if is_sync:
                     if face.select:
-                        selected_loops.extend(face.loops)
+                        selected_faces.append(face)
                 else:
-                    for loop in face.loops:
-                        if is_loop_uv_selected(loop, uv_layer):
-                            selected_loops.append(loop)
+                    if all(is_loop_uv_selected(l, uv_layer) for l in face.loops):
+                        selected_faces.append(face)
 
-            if selected_loops:
-                fit_uv_loops_to_canvas(
-                    uv_loops=selected_loops,
+            if selected_faces:
+                islands = get_connected_islands(selected_faces, uv_layer)
+                total_islands += len(islands)
+
+                pack_islands_to_canvas(
+                    islands=islands,
                     uv_layer=uv_layer,
                     margin=self.margin,
-                    keep_aspect=self.keep_aspect,
+                    spacing=self.spacing,
                 )
                 bmesh.update_edit_mesh(obj.data)
-                total_loops += len(selected_loops)
 
-        if total_loops == 0:
-            self.report({'WARNING'}, "No hay vértices UV seleccionados para ajustar.")
+        if total_islands == 0:
+            self.report({'WARNING'}, "No hay islas UV seleccionadas para ajustar.")
             return {'CANCELLED'}
 
-        self.report({'INFO'}, f"Selección UV ajustada al canvas [0, 1] ({total_loops} vértices).")
+        self.report({'INFO'}, f"{total_islands} isla(s) UV acomodada(s) al canvas [0, 1] sin superposiciones.")
         return {'FINISHED'}

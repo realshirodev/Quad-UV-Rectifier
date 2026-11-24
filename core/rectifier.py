@@ -2,7 +2,7 @@
 """
 Core algorithm for Quad UV Rectifier.
 Topological grid propagation across shared edges in BMesh,
-and canvas fitting/centering in [0, 1] texture space.
+and Shelf Bin Packing of multiple islands into [0, 1] texture space without overlaps.
 """
 
 import math
@@ -92,6 +92,8 @@ def get_connected_islands(selected_quads, uv_layer):
     """
     Agrupa los quads seleccionados en islas conectadas topológicamente a través de
     sus aristas compartidas en BMesh (respetando costuras/seams en UV).
+    Ambos vértices de la arista compartida deben tener coordenadas UV idénticas
+    para considerarse en la misma isla; de lo contrario es una costura abierta.
     """
     face_set = set(selected_quads)
     islands = []
@@ -106,64 +108,128 @@ def get_connected_islands(selected_quads, uv_layer):
             f = queue.pop(0)
             island.append(f)
 
-            for loop in f.loops:
-                edge = loop.edge
+            for edge in f.edges:
+                v_A = edge.verts[0]
+                v_B = edge.verts[1]
+                l_A = next((l for l in f.loops if l.vert == v_A), None)
+                l_B = next((l for l in f.loops if l.vert == v_B), None)
+                if not l_A or not l_B:
+                    continue
+
                 for linked in edge.link_faces:
                     if linked in face_set:
-                        l_curr = loop
-                        l_linked = next((l for l in linked.loops if l.vert == loop.vert), None)
-                        if l_linked and (l_curr[uv_layer].uv - l_linked[uv_layer].uv).length < 1e-3:
-                            face_set.remove(linked)
-                            queue.append(linked)
+                        m_A = next((l for l in linked.loops if l.vert == v_A), None)
+                        m_B = next((l for l in linked.loops if l.vert == v_B), None)
+                        if m_A and m_B:
+                            if ((l_A[uv_layer].uv - m_A[uv_layer].uv).length < 1e-3 and
+                                (l_B[uv_layer].uv - m_B[uv_layer].uv).length < 1e-3):
+                                face_set.remove(linked)
+                                queue.append(linked)
 
         islands.append(island)
 
     return islands
 
 
-def fit_uv_loops_to_canvas(uv_loops, uv_layer, margin=0.02, keep_aspect=True):
+def pack_islands_to_canvas(islands, uv_layer, margin=0.02, spacing=0.015):
     """
-    Escala y centra una colección de loops UV dentro del canvas [0.0, 1.0].
+    Empaqueta y acomoda múltiples islas UV dentro del canvas [0.0, 1.0] sin superposiciones.
+    Utiliza Shelf Bin Packing para que las tiras/islas nunca se monten una encima de otra.
     """
-    if not uv_loops:
+    if not islands:
         return
 
-    coords = [l[uv_layer].uv for l in uv_loops]
-    min_u = min(c.x for c in coords)
-    max_u = max(c.x for c in coords)
-    min_v = min(c.y for c in coords)
-    max_v = max(c.y for c in coords)
+    island_data = []
+    total_area = 0.0
 
-    w = max_u - min_u
-    h = max_v - min_v
+    for idx, island_faces in enumerate(islands):
+        loops = [l for f in island_faces for l in f.loops]
+        if not loops:
+            continue
+        coords = [l[uv_layer].uv for l in loops]
+        min_u = min(c.x for c in coords)
+        max_u = max(c.x for c in coords)
+        min_v = min(c.y for c in coords)
+        max_v = max(c.y for c in coords)
 
-    if w < 1e-6 or h < 1e-6:
+        w = max(max_u - min_u, 1e-4)
+        h = max(max_v - min_v, 1e-4)
+
+        for l in loops:
+            l[uv_layer].uv.x -= min_u
+            l[uv_layer].uv.y -= min_v
+
+        island_data.append({
+            'index': idx,
+            'faces': island_faces,
+            'loops': loops,
+            'w': w,
+            'h': h,
+            'x': 0.0,
+            'y': 0.0,
+        })
+        total_area += w * h
+
+    if not island_data:
         return
 
-    margin = max(0.0, min(margin, 0.45))
+    if len(island_data) == 1:
+        data = island_data[0]
+        avail_w = 1.0 - 2.0 * margin
+        avail_h = 1.0 - 2.0 * margin
+        scale = min(avail_w / data['w'], avail_h / data['h'])
+        off_x = margin + (avail_w - data['w'] * scale) * 0.5
+        off_y = margin + (avail_h - data['h'] * scale) * 0.5
+        for l in data['loops']:
+            l[uv_layer].uv = Vector((
+                l[uv_layer].uv.x * scale + off_x,
+                l[uv_layer].uv.y * scale + off_y
+            ))
+        return
+
+    island_data.sort(key=lambda d: (-d['h'], -d['w']))
+
+    target_shelf_width = max(max(d['w'] for d in island_data), math.sqrt(total_area) * 1.25)
+
+    shelves = []
+    current_shelf = {'x': 0.0, 'y': 0.0, 'h': 0.0, 'items': []}
+    curr_y = 0.0
+
+    for item in island_data:
+        if current_shelf['items'] and (current_shelf['x'] + item['w'] > target_shelf_width):
+            shelves.append(current_shelf)
+            curr_y += current_shelf['h'] + spacing
+            current_shelf = {'x': 0.0, 'y': curr_y, 'h': 0.0, 'items': []}
+
+        item['x'] = current_shelf['x']
+        item['y'] = current_shelf['y']
+        current_shelf['items'].append(item)
+        current_shelf['x'] += item['w'] + spacing
+        current_shelf['h'] = max(current_shelf['h'], item['h'])
+
+    if current_shelf['items']:
+        shelves.append(current_shelf)
+
+    total_packed_w = max(item['x'] + item['w'] for item in island_data)
+    total_packed_h = max(item['y'] + item['h'] for item in island_data)
+
     avail_w = 1.0 - 2.0 * margin
     avail_h = 1.0 - 2.0 * margin
+    scale = min(avail_w / total_packed_w, avail_h / total_packed_h)
 
-    if keep_aspect:
-        scale = min(avail_w / w, avail_h / h)
-        scale_u = scale
-        scale_v = scale
-    else:
-        scale_u = avail_w / w
-        scale_v = avail_h / h
+    final_assembly_w = total_packed_w * scale
+    final_assembly_h = total_packed_h * scale
+    final_offset_x = margin + (avail_w - final_assembly_w) * 0.5
+    final_offset_y = margin + (avail_h - final_assembly_h) * 0.5
 
-    final_w = w * scale_u
-    final_h = h * scale_v
-
-    offset_u = margin + (avail_w - final_w) * 0.5 - min_u * scale_u
-    offset_v = margin + (avail_h - final_h) * 0.5 - min_v * scale_v
-
-    for l in uv_loops:
-        uv = l[uv_layer].uv
-        l[uv_layer].uv = Vector((
-            uv.x * scale_u + offset_u,
-            uv.y * scale_v + offset_v
-        ))
+    for item in island_data:
+        base_x = final_offset_x + item['x'] * scale
+        base_y = final_offset_y + item['y'] * scale
+        for l in item['loops']:
+            l[uv_layer].uv = Vector((
+                base_x + l[uv_layer].uv.x * scale,
+                base_y + l[uv_layer].uv.y * scale
+            ))
 
 
 def rectify_connected_island_grid(island_faces, uv_layer, shape_mode='SQUARE', active_face=None):

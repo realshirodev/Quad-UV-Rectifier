@@ -1,9 +1,9 @@
 schema_version = "1.0.0"
 
 id = "quad_uv_rectifier"
-version = "1.4.0"
+version = "1.5.0"
 name = "Quad UV Rectifier"
-tagline = "Endereza caras quad en UV a cuadrículas continuas ortogonales y ajusta al canvas [0, 1]"
+tagline = "Endereza caras quad en UV a cuadrículas continuas y acomoda al canvas [0, 1] sin montarse"
 maintainer = "ShiroDev <https://www.youtube.com/@shiro_dev>"
 type = "add-on"
 
