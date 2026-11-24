@@ -38,27 +38,35 @@ class UV_PT_quad_rectifier(bpy.types.Panel):
         is_sync = scene.tool_settings.use_uv_select_sync
         h_row.label(text="Sync: ON" if is_sync else "Sync: OFF", icon='LINKED' if is_sync else 'UNLINKED')
 
-        # Botones Principales de Cuadrícula Continua
+        # Sección 1: Cuadrícula Continua Unida + Auto Canvas
         box_grid = layout.box()
-        box_grid.label(text="Cuadrícula Continua (Unida):", icon='MESH_GRID')
+        box_grid.label(text="Cuadrícula Continua Unida:", icon='MESH_GRID')
         col_g = box_grid.column(align=True)
 
-        op_sq = col_g.operator("uv.quad_rectifier", text="Grilla Cuadrada (1:1)", icon='GRID')
+        op_sq = col_g.operator("uv.quad_rectifier", text="Grilla Cuadrada + Canvas (1:1)", icon='GRID')
         op_sq.shape_mode = 'SQUARE'
+        op_sq.fit_to_canvas = True
 
-        op_rect = col_g.operator("uv.quad_rectifier", text="Grilla Rectangular", icon='SNAP_FACE')
+        op_rect = col_g.operator("uv.quad_rectifier", text="Grilla Rectangular + Canvas", icon='SNAP_FACE')
         op_rect.shape_mode = 'RECTANGLE'
+        op_rect.fit_to_canvas = True
+
+        row_raw = col_g.row(align=True)
+        op_sq_raw = row_raw.operator("uv.quad_rectifier", text="Grilla 1:1 (Sin Canvas)", icon='STICKY_UVS_DISABLE')
+        op_sq_raw.shape_mode = 'SQUARE'
+        op_sq_raw.fit_to_canvas = False
 
         layout.separator()
 
-        box_info = layout.box()
-        box_info.label(text="Topología:", icon='INFO')
-        box_info.label(text="Une y alinea bordes compartidos")
-        box_info.label(text="sin huecos ni diagonales.")
+        # Sección 2: Ajuste Dedicado al Canvas [0, 1]
+        box_canvas = layout.box()
+        box_canvas.label(text="Ajuste al Canvas [0, 1]:", icon='IMAGE_PLANE')
+        col_c = box_canvas.column(align=True)
+        col_c.operator("uv.fit_to_canvas", text="Ajustar al Canvas (0-1)", icon='FULLSCREEN_ENTER')
 
         layout.separator()
 
-        # Sección de autoría y enlaces oficiales
+        # Sección 3: Autoría y Enlaces Oficiales
         box_author = layout.box()
         b_row = box_author.row(align=True)
         b_row.label(text=f"Dev: {_ADDON_INFO['author']}", icon='USER')

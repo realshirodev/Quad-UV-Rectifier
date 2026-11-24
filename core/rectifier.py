@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 Core algorithm for Quad UV Rectifier.
-Topological grid propagation across shared edges in BMesh.
-Unites adjacent quads into a continuous, seamless orthogonal grid (zero margins, zero gaps).
+Topological grid propagation across shared edges in BMesh,
+and canvas fitting/centering in [0, 1] texture space.
 """
 
 import math
@@ -121,6 +121,51 @@ def get_connected_islands(selected_quads, uv_layer):
     return islands
 
 
+def fit_uv_loops_to_canvas(uv_loops, uv_layer, margin=0.02, keep_aspect=True):
+    """
+    Escala y centra una colección de loops UV dentro del canvas [0.0, 1.0].
+    """
+    if not uv_loops:
+        return
+
+    coords = [l[uv_layer].uv for l in uv_loops]
+    min_u = min(c.x for c in coords)
+    max_u = max(c.x for c in coords)
+    min_v = min(c.y for c in coords)
+    max_v = max(c.y for c in coords)
+
+    w = max_u - min_u
+    h = max_v - min_v
+
+    if w < 1e-6 or h < 1e-6:
+        return
+
+    margin = max(0.0, min(margin, 0.45))
+    avail_w = 1.0 - 2.0 * margin
+    avail_h = 1.0 - 2.0 * margin
+
+    if keep_aspect:
+        scale = min(avail_w / w, avail_h / h)
+        scale_u = scale
+        scale_v = scale
+    else:
+        scale_u = avail_w / w
+        scale_v = avail_h / h
+
+    final_w = w * scale_u
+    final_h = h * scale_v
+
+    offset_u = margin + (avail_w - final_w) * 0.5 - min_u * scale_u
+    offset_v = margin + (avail_h - final_h) * 0.5 - min_v * scale_v
+
+    for l in uv_loops:
+        uv = l[uv_layer].uv
+        l[uv_layer].uv = Vector((
+            uv.x * scale_u + offset_u,
+            uv.y * scale_v + offset_v
+        ))
+
+
 def rectify_connected_island_grid(island_faces, uv_layer, shape_mode='SQUARE', active_face=None):
     """
     Propaga las coordenadas de cuadrícula fila por fila y columna por columna
@@ -202,7 +247,6 @@ def rectify_connected_island_grid(island_faces, uv_layer, shape_mode='SQUARE', a
                 if (m_A[uv_layer].uv - l_A[uv_layer].uv).length > 1e-3 or (m_B[uv_layer].uv - l_B[uv_layer].uv).length > 1e-3:
                     continue
 
-                # Compartir exactamente las mismas coordenadas en el borde compartido
                 target_uvs[m_A] = T_A.copy()
                 target_uvs[m_B] = T_B.copy()
 

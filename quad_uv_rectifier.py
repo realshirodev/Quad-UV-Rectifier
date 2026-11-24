@@ -4,16 +4,16 @@ Quad UV Rectifier - Blender 4.0+ Add-on
 ========================================
 Add-on para el UV Editor que endereza caras UV de tipo quad en cuadrículas limpias
 y continuas (cuadrados o rectángulos), soldando y compartiendo los bordes entre
-caras adyacentes sin huecos ni márgenes, respetando la topología de conexión de bmesh.
+caras adyacentes sin huecos ni márgenes, y acomodando el resultado al canvas [0, 1].
 """
 
 _ADDON_INFO = {
     "name": "Quad UV Rectifier",
     "author": "ShiroDev",
-    "version": (1, 3, 0),
+    "version": (1, 4, 0),
     "blender": (4, 0, 0),
     "location": "UV Editor > Barra Lateral (N) > pestaña 'UV Square'",
-    "description": "Endereza caras quad en una cuadrícula continua ortogonal conectada, sin diagonales, huecos ni cruces.",
+    "description": "Endereza caras quad en cuadrículas continuas unidas sin huecos ni diagonales, y ajusta las UVs al canvas [0, 1].",
     "category": "UV",
     "doc_url": "https://teamapricot.com",
     "website": "https://teamapricot.com",
@@ -150,6 +150,57 @@ def get_connected_islands(selected_quads, uv_layer):
 
 
 # =========================================================================
+# Lógica de Ajuste al Canvas [0.0, 1.0]
+# =========================================================================
+
+def fit_uv_loops_to_canvas(uv_loops, uv_layer, margin=0.02, keep_aspect=True):
+    """
+    Escala y centra una colección de loops UV dentro del canvas [0.0, 1.0].
+    - margin: margen respecto a los bordes del canvas (ej. 0.02 = 2%).
+    - keep_aspect: conserva la proporción de aspecto (cuadrados siguen siendo 1:1).
+    """
+    if not uv_loops:
+        return
+
+    coords = [l[uv_layer].uv for l in uv_loops]
+    min_u = min(c.x for c in coords)
+    max_u = max(c.x for c in coords)
+    min_v = min(c.y for c in coords)
+    max_v = max(c.y for c in coords)
+
+    w = max_u - min_u
+    h = max_v - min_v
+
+    if w < 1e-6 or h < 1e-6:
+        return
+
+    margin = max(0.0, min(margin, 0.45))
+    avail_w = 1.0 - 2.0 * margin
+    avail_h = 1.0 - 2.0 * margin
+
+    if keep_aspect:
+        scale = min(avail_w / w, avail_h / h)
+        scale_u = scale
+        scale_v = scale
+    else:
+        scale_u = avail_w / w
+        scale_v = avail_h / h
+
+    final_w = w * scale_u
+    final_h = h * scale_v
+
+    offset_u = margin + (avail_w - final_w) * 0.5 - min_u * scale_u
+    offset_v = margin + (avail_h - final_h) * 0.5 - min_v * scale_v
+
+    for l in uv_loops:
+        uv = l[uv_layer].uv
+        l[uv_layer].uv = Vector((
+            uv.x * scale_u + offset_u,
+            uv.y * scale_v + offset_v
+        ))
+
+
+# =========================================================================
 # Lógica de Transformación: Cuadrícula Continua Topológica (Sin Huecos)
 # =========================================================================
 
@@ -166,12 +217,10 @@ def rectify_connected_island_grid(island_faces, uv_layer, shape_mode='SQUARE', a
     if not island_faces:
         return
 
-    # 1. Determinar cara base inicial (la cara activa si está en la isla, o la primera)
     start_face = island_faces[0]
     if active_face and active_face in island_faces:
         start_face = active_face
 
-    # 2. Inicializar la cara base con cuadrantes CCW limpios
     corners = get_sorted_ccw_loops(start_face, uv_layer)
     uv_coords = [loop[uv_layer].uv for loop in start_face.loops]
 
@@ -201,7 +250,6 @@ def rectify_connected_island_grid(island_faces, uv_layer, shape_mode='SQUARE', a
     target_uvs[corners['TR']] = centroid + Vector((half_w, half_h))
     target_uvs[corners['TL']] = centroid + Vector((-half_w, half_h))
 
-    # 3. Propagación topológica por BFS
     visited_faces = {start_face}
     queue = [start_face]
     island_set = set(island_faces)
@@ -209,7 +257,6 @@ def rectify_connected_island_grid(island_faces, uv_layer, shape_mode='SQUARE', a
     while queue:
         curr_face = queue.pop(0)
 
-        # Recorrer las 4 aristas perimetrales de la cara actual
         f_loops = list(curr_face.loops)
         for i in range(4):
             l_A = f_loops[i]
@@ -230,49 +277,40 @@ def rectify_connected_island_grid(island_faces, uv_layer, shape_mode='SQUARE', a
             v_B = l_B.vert
             bm_edge = curr_face.edges[i]
 
-            # Buscar cara vecina que comparta esta arista
             for next_face in bm_edge.link_faces:
                 if next_face == curr_face or next_face not in island_set or next_face in visited_faces:
                     continue
 
-                # Localizar los loops en next_face correspondientes a v_A y v_B
                 m_A = next((l for l in next_face.loops if l.vert == v_A), None)
                 m_B = next((l for l in next_face.loops if l.vert == v_B), None)
 
                 if not m_A or not m_B:
                     continue
 
-                # Verificar conexión continua en UV (respetar costuras abiertas)
                 if (m_A[uv_layer].uv - l_A[uv_layer].uv).length > 1e-3 or (m_B[uv_layer].uv - l_B[uv_layer].uv).length > 1e-3:
                     continue
 
-                # 4. Asignar EXACTAMENTE las mismas coordenadas UV en el borde compartido (0 huecos)
+                # Asignar exactamente las mismas coordenadas UV en el borde compartido (0 huecos)
                 target_uvs[m_A] = T_A.copy()
                 target_uvs[m_B] = T_B.copy()
 
-                # Identificar los otros 2 loops opuestos de next_face
                 next_loops = list(next_face.loops)
                 idx_A = next_loops.index(m_A)
                 idx_B = next_loops.index(m_B)
 
                 if idx_B == (idx_A + 1) % 4:
-                    # Orden cíclico: m_A -> m_B -> m_C -> m_D
                     m_C = next_loops[(idx_B + 1) % 4]
                     m_D = next_loops[(idx_B + 2) % 4]
                     is_direct = True
                 else:
-                    # Orden cíclico: m_B -> m_A -> m_C -> m_D
                     m_C = next_loops[(idx_A + 1) % 4]
                     m_D = next_loops[(idx_A + 2) % 4]
                     is_direct = False
 
-                # 5. Proyección perpendicular ortogonal para los dos vértices opuestos
                 u_hat = V_edge / edge_len
-                # Dos vectores unitarios perpendiculares: izquierda y derecha
                 P_left = Vector((-u_hat.y, u_hat.x))
                 P_right = Vector((u_hat.y, -u_hat.x))
 
-                # Determinar cuál dirección perpendicular apunta hacia el interior de next_face
                 orig_mid_shared = (m_A[uv_layer].uv + m_B[uv_layer].uv) * 0.5
                 orig_mid_opp = (m_C[uv_layer].uv + m_D[uv_layer].uv) * 0.5
                 dir_orig = orig_mid_opp - orig_mid_shared
@@ -285,7 +323,6 @@ def rectify_connected_island_grid(island_faces, uv_layer, shape_mode='SQUARE', a
                 else:
                     n_perp = P_right
 
-                # Longitud del paso de celda
                 if shape_mode == 'SQUARE':
                     step_len = edge_len
                 else:
@@ -295,7 +332,6 @@ def rectify_connected_island_grid(island_faces, uv_layer, shape_mode='SQUARE', a
 
                 V_perp = n_perp * step_len
 
-                # Asignar los dos vértices opuestos para completar la celda rectangular ortogonal
                 if is_direct:
                     target_uvs[m_D] = T_A + V_perp
                     target_uvs[m_C] = T_B + V_perp
@@ -306,13 +342,12 @@ def rectify_connected_island_grid(island_faces, uv_layer, shape_mode='SQUARE', a
                 visited_faces.add(next_face)
                 queue.append(next_face)
 
-    # Aplicar coordenadas finales sobre la capa UV activa
     for loop, target in target_uvs.items():
         loop[uv_layer].uv = target
 
 
 # =========================================================================
-# Operador Principal de Blender
+# Operadores de Blender
 # =========================================================================
 
 class UV_OT_quad_rectifier(bpy.types.Operator):
@@ -330,6 +365,27 @@ class UV_OT_quad_rectifier(bpy.types.Operator):
             ('RECTANGLE', "Rectangular", "Mantiene las proporciones ancho/alto de las celdas"),
         ],
         default='SQUARE',
+    )
+
+    fit_to_canvas: bpy.props.BoolProperty(
+        name="Ajustar al Canvas (0-1)",
+        description="Escala y centra automáticamente las UVs rectificadas dentro del espacio [0, 1] de la textura",
+        default=True,
+    )
+
+    canvas_margin: bpy.props.FloatProperty(
+        name="Margen de Canvas",
+        description="Margen respecto a los bordes del canvas [0, 1]",
+        default=0.02,
+        min=0.0,
+        max=0.4,
+        precision=3,
+    )
+
+    keep_aspect: bpy.props.BoolProperty(
+        name="Mantener Proporción",
+        description="Mantiene la proporción uniforme al escalar para no deformar las celdas cuadradas",
+        default=True,
     )
 
     @classmethod
@@ -372,12 +428,24 @@ class UV_OT_quad_rectifier(bpy.types.Operator):
             total_islands += len(islands)
 
             # 2. Rectificar cada isla conectada propagando la cuadrícula continua
+            all_processed_loops = []
             for island in islands:
                 rectify_connected_island_grid(
                     island_faces=island,
                     uv_layer=uv_layer,
                     shape_mode=self.shape_mode,
                     active_face=active_face,
+                )
+                for f in island:
+                    all_processed_loops.extend(f.loops)
+
+            # 3. Acomodar opcionalmente al Canvas [0, 1]
+            if self.fit_to_canvas and all_processed_loops:
+                fit_uv_loops_to_canvas(
+                    uv_loops=all_processed_loops,
+                    uv_layer=uv_layer,
+                    margin=self.canvas_margin,
+                    keep_aspect=self.keep_aspect,
                 )
 
             bmesh.update_edit_mesh(obj.data)
@@ -390,11 +458,89 @@ class UV_OT_quad_rectifier(bpy.types.Operator):
             )
             return {'CANCELLED'}
 
-        msg = f"Quad UV Rectifier: {total_quads} quads unidos en {total_islands} cuadrícula(s) continua(s)."
+        msg = f"Quad UV Rectifier: {total_quads} quads unidos en {total_islands} cuadrícula(s)"
+        if self.fit_to_canvas:
+            msg += " y ajustados al canvas [0, 1]"
+        msg += "."
         if total_ignored > 0:
             msg += f" ({total_ignored} caras no-quad ignoradas)."
         self.report({'INFO'}, msg)
 
+        return {'FINISHED'}
+
+
+class UV_OT_fit_to_canvas(bpy.types.Operator):
+    """Escala y centra las caras UV seleccionadas dentro del canvas [0, 1]"""
+    bl_idname = "uv.fit_to_canvas"
+    bl_label = "Ajustar al Canvas UV"
+    bl_description = "Escala y centra la selección UV dentro del espacio [0, 1] de la textura"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    margin: bpy.props.FloatProperty(
+        name="Margen",
+        description="Margen respecto a los bordes del canvas [0, 1]",
+        default=0.02,
+        min=0.0,
+        max=0.4,
+        precision=3,
+    )
+
+    keep_aspect: bpy.props.BoolProperty(
+        name="Mantener Proporción",
+        description="Mantiene la proporción uniforme para no deformar las proporciones",
+        default=True,
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return (
+            context.mode == 'EDIT_MESH'
+            and context.space_data is not None
+            and context.space_data.type == 'IMAGE_EDITOR'
+        )
+
+    def execute(self, context):
+        is_sync = context.scene.tool_settings.use_uv_select_sync
+
+        edit_objects = [obj for obj in context.objects_in_mode if obj.type == 'MESH']
+        if not edit_objects and context.active_object and context.active_object.type == 'MESH':
+            edit_objects = [context.active_object]
+
+        if not edit_objects:
+            self.report({'WARNING'}, "No hay mallas activas en modo edición.")
+            return {'CANCELLED'}
+
+        total_loops = 0
+
+        for obj in edit_objects:
+            bm = bmesh.from_edit_mesh(obj.data)
+            uv_layer = bm.loops.layers.uv.verify()
+
+            selected_loops = []
+            for face in bm.faces:
+                if is_sync:
+                    if face.select:
+                        selected_loops.extend(face.loops)
+                else:
+                    for loop in face.loops:
+                        if is_loop_uv_selected(loop, uv_layer):
+                            selected_loops.append(loop)
+
+            if selected_loops:
+                fit_uv_loops_to_canvas(
+                    uv_loops=selected_loops,
+                    uv_layer=uv_layer,
+                    margin=self.margin,
+                    keep_aspect=self.keep_aspect,
+                )
+                bmesh.update_edit_mesh(obj.data)
+                total_loops += len(selected_loops)
+
+        if total_loops == 0:
+            self.report({'WARNING'}, "No hay vértices UV seleccionados para ajustar.")
+            return {'CANCELLED'}
+
+        self.report({'INFO'}, f"Selección UV ajustada al canvas [0, 1] ({total_loops} vértices).")
         return {'FINISHED'}
 
 
@@ -437,27 +583,35 @@ class UV_PT_quad_rectifier(bpy.types.Panel):
         is_sync = scene.tool_settings.use_uv_select_sync
         h_row.label(text="Sync: ON" if is_sync else "Sync: OFF", icon='LINKED' if is_sync else 'UNLINKED')
 
-        # Botones Principales de Cuadrícula Continua
+        # Sección 1: Cuadrícula Continua Unida + Auto Canvas
         box_grid = layout.box()
-        box_grid.label(text="Cuadrícula Continua (Unida):", icon='MESH_GRID')
+        box_grid.label(text="Cuadrícula Continua Unida:", icon='MESH_GRID')
         col_g = box_grid.column(align=True)
 
-        op_sq = col_g.operator("uv.quad_rectifier", text="Grilla Cuadrada (1:1)", icon='GRID')
+        op_sq = col_g.operator("uv.quad_rectifier", text="Grilla Cuadrada + Canvas (1:1)", icon='GRID')
         op_sq.shape_mode = 'SQUARE'
+        op_sq.fit_to_canvas = True
 
-        op_rect = col_g.operator("uv.quad_rectifier", text="Grilla Rectangular", icon='SNAP_FACE')
+        op_rect = col_g.operator("uv.quad_rectifier", text="Grilla Rectangular + Canvas", icon='SNAP_FACE')
         op_rect.shape_mode = 'RECTANGLE'
+        op_rect.fit_to_canvas = True
+
+        row_raw = col_g.row(align=True)
+        op_sq_raw = row_raw.operator("uv.quad_rectifier", text="Grilla 1:1 (Sin Canvas)", icon='STICKY_UVS_DISABLE')
+        op_sq_raw.shape_mode = 'SQUARE'
+        op_sq_raw.fit_to_canvas = False
 
         layout.separator()
 
-        box_info = layout.box()
-        box_info.label(text="Topología:", icon='INFO')
-        box_info.label(text="Une y alinea bordes compartidos")
-        box_info.label(text="sin huecos ni diagonales.")
+        # Sección 2: Ajuste Dedicado al Canvas [0, 1]
+        box_canvas = layout.box()
+        box_canvas.label(text="Ajuste al Canvas [0, 1]:", icon='IMAGE_PLANE')
+        col_c = box_canvas.column(align=True)
+        col_c.operator("uv.fit_to_canvas", text="Ajustar al Canvas (0-1)", icon='FULLSCREEN_ENTER')
 
         layout.separator()
 
-        # Sección de autoría y enlaces oficiales
+        # Sección 3: Autoría y Enlaces Oficiales
         box_author = layout.box()
         b_row = box_author.row(align=True)
         b_row.label(text=f"Dev: {_ADDON_INFO['author']}", icon='USER')
@@ -475,6 +629,7 @@ class UV_PT_quad_rectifier(bpy.types.Panel):
 
 classes = (
     UV_OT_quad_rectifier,
+    UV_OT_fit_to_canvas,
     UV_PT_quad_rectifier,
 )
 

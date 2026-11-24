@@ -6,13 +6,14 @@
 [![Website](https://img.shields.io/badge/Website-Team%20Apricot-success?logo=google-chrome&logoColor=white)](https://teamapricot.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Quad UV Rectifier** es un add-on y extensión profesional para el **UV Editor** de Blender (compatible desde Blender 4.0 hasta 5.3+) diseñado para alinear y unir caras UV de tipo quad en una **cuadrícula continua ortogonal perfecta** (cuadrados 1:1 o rectángulos limpios), propagando la topología real a través de las aristas compartidas sin huecos, márgenes, diagonales ni autointersecciones (*bowties*).
+**Quad UV Rectifier** es un add-on y extensión profesional para el **UV Editor** de Blender (compatible desde Blender 4.0 hasta 5.3+) diseñado para alinear y unir caras UV de tipo quad en una **cuadrícula continua ortogonal perfecta** (cuadrados 1:1 o rectángulos limpios), propagando la topología real a través de las aristas compartidas sin huecos, márgenes, diagonales ni autointersecciones (*bowties*), con **ajuste y centrado automático al canvas [0, 1]**.
 
 ---
 
 ## ✨ Características Principales
 
-- 🔗 **Cuadrícula Continua Conectada (Sin Huecos ni Márgenes)**: A diferencia de los empaquetadores de mosaicos sueltos, propaga fila por fila y columna por columna a través de las aristas compartidas en BMesh, garantizando que las caras adyacentes compartan exactamente las mismas coordenadas UV en sus bordes comunes.
+- 🔗 **Cuadrícula Continua Conectada (Sin Huecos ni Márgenes)**: Propaga fila por fila y columna por columna a través de las aristas compartidas en BMesh, garantizando que las caras adyacentes compartan exactamente las mismas coordenadas UV en sus bordes comunes.
+- 🖼️ **Ajuste Automático al Canvas [0.0, 1.0]**: Escala y centra uniformemente la cuadrícula resultante dentro del espacio $[0, 1]$ de la textura con margen configurable (por defecto 2%), manteniendo cuadrados perfectos 1:1 o proporciones rectangulares exactas.
 - 📐 **Geometría Ortogonal Estricta**: Cada celda se transforma en un rectángulo o cuadrado 1:1 con ángulos rectos de $90^\circ$ ($\Delta V = 0$ en aristas horizontales y $\Delta U = 0$ en aristas verticales).
 - 🔄 **Topología Anti-Bowtie Matemática**: Ordena los loops perimetrales en sentido antihorario (CCW) respecto al centroide de la cara para evitar inversiones, diagonales cruzadas y caras retorcidas.
 - 🎯 **Soporte UV Sync Selection**: Detección robusta de caras quad seleccionadas tanto con **UV Sync Selection** activado (`ON`) como desactivado (`OFF`), sin alterar jamás caras adyacentes no seleccionadas.
@@ -28,7 +29,7 @@
 Quad UV Rectifier/
 ├── core/
 │   ├── __init__.py
-│   └── rectifier.py        # Algoritmo BFS de propagación topológica y ordenación CCW
+│   └── rectifier.py        # Algoritmo BFS de propagación topológica y ajuste al canvas
 ├── operators/
 │   ├── __init__.py
 │   └── rectify_ops.py      # Operadores de Blender y soporte multi-objeto
@@ -66,9 +67,11 @@ Quad UV Rectifier/
 2. Abre el **UV Editor** y presiona `N` para desplegar la barra lateral.
 3. Haz clic en la pestaña **UV Square**.
 4. Selecciona las caras quad que deseas alinear.
-5. Elige tu modo de grilla:
-   - **Grilla Cuadrada (1:1)**: Fuerza cada celda a un cuadrado perfecto conectado.
-   - **Grilla Rectangular**: Mantiene las proporciones relativas de ancho y alto de cada cara.
+5. Elige tu acción:
+   - **Grilla Cuadrada + Canvas (1:1)**: Endereza en cuadrícula continua y encaja en el canvas $[0, 1]$.
+   - **Grilla Rectangular + Canvas**: Mantiene proporciones rectangulares y encaja en el canvas $[0, 1]$.
+   - **Grilla 1:1 (Sin Canvas)**: Endereza en la escala y posición original.
+   - **Ajustar al Canvas (0-1)**: Botón directo para escalar y centrar cualquier selección UV actual al canvas de textura.
 
 ---
 
