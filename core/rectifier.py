@@ -1,16 +1,17 @@
 # -*- coding: utf-8 -*-
 """
 Core algorithm for Quad UV Rectifier.
-Handles geometric quad rectification, anti-bowtie cyclic mapping,
-shared corner welding (Union-Find), and grid snapping.
+Handles CCW angular loop ordering, in-place rectification,
+shared corner welding, and grid packing for rings/fans/overlapping quads.
 """
 
+import math
 from mathutils import Vector
 from collections import defaultdict
 
 
 class UnionFind:
-    """Estructura Disjoint-Set (Union-Find) para agrupar loops coincidentes en UV."""
+    """Estructura Disjoint-Set para agrupar loops coincidentes en UV."""
     def __init__(self):
         self.parent = {}
 
@@ -26,123 +27,134 @@ class UnionFind:
             self.parent[root1] = root2
 
 
-def rectify_quad_face(face, uv_layer, shape_mode):
-    """
-    Calcula las posiciones UV rectificadas para los 4 loops de una cara quad.
+def angular_diff(a1, a2):
+    """Calcula la distancia angular mínima en radianes entre dos ángulos."""
+    d = (a1 - a2 + math.pi) % (2.0 * math.pi) - math.pi
+    return abs(d)
 
-    Estrategia anti-bowtie (sin autointersección):
-    1. Calcula el centroide (U, V) y las dimensiones del bounding box local.
-    2. Define las 4 esquinas ideales de la cuadrícula respecto al centroide:
-       - Bottom-Left  (BL): (-half_w, -half_h) [Cuadrante III]
-       - Bottom-Right (BR): (+half_w, -half_h) [Cuadrante IV]
-       - Top-Right    (TR): (+half_w, +half_h) [Cuadrante I]
-       - Top-Left     (TL): (-half_w, +half_h) [Cuadrante II]
-    3. Para preservar estrictamente la topología de la cara y evitar que los lados
-       se crucen formando un "bowtie", se evalúan las 8 configuraciones cíclicas válidas
-       (4 en sentido antihorario y 4 en sentido horario).
-    4. Se selecciona la configuración cíclica que minimiza la distancia total de los
-       loops a su respectivo cuadrante/esquina.
+
+def get_sorted_ccw_loops(face, uv_layer):
+    """
+    Ordena los 4 loops de una cara quad según su ángulo en sentido antihorario (CCW)
+    respecto al centroide UV de la cara.
+    
+    Alinea cíclicamente los loops con las 4 esquinas ideales:
+    - BL (Bottom-Left):  ideal -135° (-3pi/4)
+    - BR (Bottom-Right): ideal  -45° (-pi/4)
+    - TR (Top-Right):    ideal  +45° (+pi/4)
+    - TL (Top-Left):     ideal +135° (+3pi/4)
+
+    Retorna un diccionario: { 'BL': loop, 'BR': loop, 'TR': loop, 'TL': loop }
+    Garantiza que el orden perimetral nunca se cruce (evita bowties y diagonales).
     """
     loops = list(face.loops)
-    uv_coords = [loop[uv_layer].uv.copy() for loop in loops]
+    uvs = [loop[uv_layer].uv.copy() for loop in loops]
 
-    # Centroide (U, V) de la cara
-    c_u = sum(uv.x for uv in uv_coords) / 4.0
-    c_v = sum(uv.y for uv in uv_coords) / 4.0
-    centroid = Vector((c_u, c_v))
+    c_u = sum(uv.x for uv in uvs) / 4.0
+    c_v = sum(uv.y for uv in uvs) / 4.0
 
-    # Dimensiones originales en UV
-    min_u = min(uv.x for uv in uv_coords)
-    max_u = max(uv.x for uv in uv_coords)
-    min_v = min(uv.y for uv in uv_coords)
-    max_v = max(uv.y for uv in uv_coords)
+    loop_with_angle = []
+    for loop in loops:
+        uv = loop[uv_layer].uv
+        ang = math.atan2(uv.y - c_v, uv.x - c_u)
+        loop_with_angle.append((ang, loop))
 
-    width = max(max_u - min_u, 1e-5)
-    height = max(max_v - min_v, 1e-5)
+    loop_with_angle.sort(key=lambda item: item[0])
+    sorted_loops = [item[1] for item in loop_with_angle]
+    sorted_angles = [item[0] for item in loop_with_angle]
 
-    if shape_mode == 'SQUARE':
-        avg_size = (width + height) * 0.5
-        half_w = avg_size * 0.5
-        half_h = avg_size * 0.5
-    else:
-        half_w = width * 0.5
-        half_h = height * 0.5
-
-    # 4 esquinas objetivo en coordenadas UV globales
-    corner_BL = centroid + Vector((-half_w, -half_h))
-    corner_BR = centroid + Vector((half_w, -half_h))
-    corner_TR = centroid + Vector((half_w, half_h))
-    corner_TL = centroid + Vector((-half_w, half_h))
-
-    # 8 configuraciones cíclicas válidas (preservan aristas perimetrales, eliminan diagonales cruzadas)
-    cyclic_candidates = [
-        # Sentido antihorario (CCW)
-        (corner_BL, corner_BR, corner_TR, corner_TL),
-        (corner_BR, corner_TR, corner_TL, corner_BL),
-        (corner_TR, corner_TL, corner_BL, corner_BR),
-        (corner_TL, corner_BL, corner_BR, corner_TR),
-        # Sentido horario (CW)
-        (corner_BL, corner_TL, corner_TR, corner_BR),
-        (corner_TL, corner_TR, corner_BR, corner_BL),
-        (corner_TR, corner_BR, corner_BL, corner_TL),
-        (corner_BR, corner_BL, corner_TL, corner_TR),
+    target_angles = [
+        -0.75 * math.pi,  # BL
+        -0.25 * math.pi,  # BR
+         0.25 * math.pi,  # TR
+         0.75 * math.pi,  # TL
     ]
 
-    best_config = None
-    min_total_dist_sq = float('inf')
+    best_shift = 0
+    min_cost = float('inf')
+    for shift in range(4):
+        cost = sum(angular_diff(sorted_angles[(i + shift) % 4], target_angles[i]) for i in range(4))
+        if cost < min_cost:
+            min_cost = cost
+            best_shift = shift
 
-    for candidate in cyclic_candidates:
-        dist_sq = sum((uv_coords[i] - candidate[i]).length_squared for i in range(4))
-        if dist_sq < min_total_dist_sq:
-            min_total_dist_sq = dist_sq
-            best_config = candidate
+    return {
+        'BL': sorted_loops[best_shift % 4],
+        'BR': sorted_loops[(best_shift + 1) % 4],
+        'TR': sorted_loops[(best_shift + 2) % 4],
+        'TL': sorted_loops[(best_shift + 3) % 4],
+    }
 
-    return {loops[i]: best_config[i].copy() for i in range(4)}
 
-
-def process_mesh_quad_rectification(
-    bm,
-    uv_layer,
-    is_sync,
-    shape_mode='RECTANGLE',
-    weld_shared_corners=True,
-    use_snap=False,
-    snap_step=0.0625,
-):
+def get_selected_quads(bm, uv_layer, is_sync):
     """
-    Ejecuta el enderezamiento de quads sobre un objeto bmesh en modo edición.
-    Retorna una tupla (quads_procesados, caras_no_quad_ignoradas).
+    Filtra de forma robusta las caras quad seleccionadas respetando UV Sync.
+    Retorna (selected_quads, ignored_non_quads_count).
     """
-    # 1. Identificar caras seleccionadas respetando UV Sync Selection
     selected_quads = []
-    ignored_faces = 0
+    ignored_count = 0
+
+    def is_loop_selected(loop):
+        if hasattr(loop, "uv_select_vert"):
+            return bool(loop.uv_select_vert)
+        return bool(loop[uv_layer].select)
 
     for face in bm.faces:
         if is_sync:
-            face_selected = face.select
+            face_sel = face.select
         else:
-            face_selected = all(loop[uv_layer].select for loop in face.loops)
+            face_sel = all(is_loop_selected(l) for l in face.loops)
 
-        if face_selected:
+        if face_sel:
             if len(face.loops) == 4:
                 selected_quads.append(face)
             else:
-                ignored_faces += 1
+                ignored_count += 1
 
-    if not selected_quads:
-        return 0, ignored_faces
+    return selected_quads, ignored_count
 
-    # 2. Calcular posiciones objetivo iniciales por quad
+
+def rectify_in_place(selected_quads, uv_layer, shape_mode, weld_shared, use_snap, snap_step):
+    """
+    Endereza cada quad en su posición actual (1:1 o rectangular).
+    Opcionalmente promedia esquinas compartidas y aplica snap anti-colapso.
+    """
     target_uvs = {}
     initial_uvs = {}
+
     for face in selected_quads:
         for loop in face.loops:
             initial_uvs[loop] = loop[uv_layer].uv.copy()
-        quad_targets = rectify_quad_face(face, uv_layer, shape_mode)
-        target_uvs.update(quad_targets)
 
-    # 3. Soldar / promediar esquinas compartidas entre quads adyacentes
-    if weld_shared_corners and len(selected_quads) > 1:
+        corners = get_sorted_ccw_loops(face, uv_layer)
+        uv_coords = [loop[uv_layer].uv for loop in face.loops]
+
+        c_u = sum(uv.x for uv in uv_coords) / 4.0
+        c_v = sum(uv.y for uv in uv_coords) / 4.0
+        centroid = Vector((c_u, c_v))
+
+        min_u = min(uv.x for uv in uv_coords)
+        max_u = max(uv.x for uv in uv_coords)
+        min_v = min(uv.y for uv in uv_coords)
+        max_v = max(uv.y for uv in uv_coords)
+
+        width = max(max_u - min_u, 1e-4)
+        height = max(max_v - min_v, 1e-4)
+
+        if shape_mode == 'SQUARE':
+            avg_size = (width + height) * 0.5
+            half_w = avg_size * 0.5
+            half_h = avg_size * 0.5
+        else:
+            half_w = width * 0.5
+            half_h = height * 0.5
+
+        target_uvs[corners['BL']] = centroid + Vector((-half_w, -half_h))
+        target_uvs[corners['BR']] = centroid + Vector((half_w, -half_h))
+        target_uvs[corners['TR']] = centroid + Vector((half_w, half_h))
+        target_uvs[corners['TL']] = centroid + Vector((-half_w, half_h))
+
+    if weld_shared and len(selected_quads) > 1:
         loops_by_vert = defaultdict(list)
         for face in selected_quads:
             for loop in face.loops:
@@ -154,7 +166,7 @@ def process_mesh_quad_rectification(
             for i in range(n):
                 for j in range(i + 1, n):
                     l1, l2 = loops[i], loops[j]
-                    if (initial_uvs[l1] - initial_uvs[l2]).length < 1e-4:
+                    if (initial_uvs[l1] - initial_uvs[l2]).length < 1e-3:
                         uf.union(l1, l2)
 
         cluster_targets = defaultdict(list)
@@ -165,23 +177,94 @@ def process_mesh_quad_rectification(
 
         cluster_averages = {}
         for root, targets in cluster_targets.items():
-            avg_uv = sum(targets, Vector((0.0, 0.0))) / len(targets)
-            cluster_averages[root] = avg_uv
+            cluster_averages[root] = sum(targets, Vector((0.0, 0.0))) / len(targets)
 
         for face in selected_quads:
             for loop in face.loops:
                 root = uf.find(loop)
                 target_uvs[loop] = cluster_averages[root].copy()
 
-    # 4. Ajustar opcionalmente a pasos de cuadrícula (Snap)
     if use_snap and snap_step > 0.0:
-        for loop, target in target_uvs.items():
-            u = round(target.x / snap_step) * snap_step
-            v = round(target.y / snap_step) * snap_step
-            target_uvs[loop] = Vector((u, v))
+        for loop in target_uvs:
+            t = target_uvs[loop]
+            target_uvs[loop] = Vector((
+                round(t.x / snap_step) * snap_step,
+                round(t.y / snap_step) * snap_step
+            ))
 
-    # 5. Aplicar las nuevas coordenadas a la capa UV activa
+        for face in selected_quads:
+            u_coords = [target_uvs[l].x for l in face.loops]
+            v_coords = [target_uvs[l].y for l in face.loops]
+            if (max(u_coords) - min(u_coords)) < 1e-4:
+                cu = sum(u_coords) / 4.0
+                for l in face.loops:
+                    if target_uvs[l].x >= cu:
+                        target_uvs[l].x += snap_step
+            if (max(v_coords) - min(v_coords)) < 1e-4:
+                cv = sum(v_coords) / 4.0
+                for l in face.loops:
+                    if target_uvs[l].y >= cv:
+                        target_uvs[l].y += snap_step
+
     for loop, target in target_uvs.items():
         loop[uv_layer].uv = target
 
-    return len(selected_quads), ignored_faces
+
+def pack_in_grid_layout(selected_quads, uv_layer, shape_mode, padding_factor):
+    """
+    Resuelve casos de anillos radiales, abanicos y caras superpuestas.
+    Acomoda todas las caras seleccionadas como un mosaico ordenado de filas x columnas
+    dentro del bounding box de la selección, garantizando cero superposiciones.
+    """
+    n_faces = len(selected_quads)
+    if n_faces == 0:
+        return
+
+    all_uvs = [l[uv_layer].uv for f in selected_quads for l in f.loops]
+    min_u = min(uv.x for uv in all_uvs)
+    max_u = max(uv.x for uv in all_uvs)
+    min_v = min(uv.y for uv in all_uvs)
+    max_v = max(uv.y for uv in all_uvs)
+
+    span_u = max(max_u - min_u, 0.05)
+    span_v = max(max_v - min_v, 0.05)
+
+    aspect = span_u / span_v
+    cols = max(1, round(math.sqrt(n_faces * aspect)))
+    rows = math.ceil(n_faces / cols)
+
+    cell_w = span_u / (cols + (cols - 1) * padding_factor)
+    cell_h = span_v / (rows + (rows - 1) * padding_factor)
+
+    if shape_mode == 'SQUARE':
+        cell_size = min(cell_w, cell_h)
+        cell_w = cell_size
+        cell_h = cell_size
+
+    step_x = cell_w * (1.0 + padding_factor)
+    step_y = cell_h * (1.0 + padding_factor)
+
+    face_centroids = []
+    for f in selected_quads:
+        uvs = [l[uv_layer].uv for l in f.loops]
+        cu = sum(uv.x for uv in uvs) / 4.0
+        cv = sum(uv.y for uv in uvs) / 4.0
+        face_centroids.append((f, cu, cv))
+
+    face_centroids.sort(key=lambda item: (-item[2], item[1]))
+
+    for idx, (face, _, _) in enumerate(face_centroids):
+        r = idx // cols
+        c = idx % cols
+
+        c_x = min_u + c * step_x + cell_w * 0.5
+        c_y = max_v - r * step_y - cell_h * 0.5
+
+        half_w = cell_w * 0.5
+        half_h = cell_h * 0.5
+
+        corners = get_sorted_ccw_loops(face, uv_layer)
+        corners['BL'][uv_layer].uv = Vector((c_x - half_w, c_y - half_h))
+        corners['BR'][uv_layer].uv = Vector((c_x + half_w, c_y - half_h))
+        corners['TR'][uv_layer].uv = Vector((c_x + half_w, c_y + half_h))
+        corners['TL'][uv_layer].uv = Vector((c_x - half_w, c_y + half_h))
