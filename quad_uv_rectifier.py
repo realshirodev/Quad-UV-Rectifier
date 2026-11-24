@@ -11,10 +11,10 @@ dentro del canvas [0, 1] sin superposiciones ("sin montarse").
 _ADDON_INFO = {
     "name": "Quad UV Rectifier",
     "author": "ShiroDev",
-    "version": (1, 5, 0),
+    "version": (1, 6, 0),
     "blender": (4, 0, 0),
     "location": "UV Editor > Barra Lateral (N) > pestaña 'UV Square'",
-    "description": "Endereza caras quad en cuadrículas continuas y acomoda las islas al canvas [0, 1] sin superposiciones ni cruces.",
+    "description": "Endereza caras quad en cuadrículas continuas, convierte a círculos/anillos concéntricos y acomoda al canvas [0, 1].",
     "category": "UV",
     "doc_url": "https://teamapricot.com",
     "website": "https://teamapricot.com",
@@ -415,6 +415,88 @@ def rectify_connected_island_grid(island_faces, uv_layer, shape_mode='SQUARE', a
         loop[uv_layer].uv = target
 
 
+def transform_island_to_circle(
+    island_faces,
+    uv_layer,
+    circle_mode='ANNULUS',
+    inner_radius_ratio=0.35,
+    start_angle=0.0,
+    span_angle=360.0,
+    fit_to_canvas=True,
+    canvas_margin=0.02,
+    active_face=None,
+):
+    """
+    Transforma una isla de quads en un círculo concéntrico o anillo radial perfecto en UV space.
+    1. Rectifica la isla en una cuadrícula continua ortogonal paramétrica (u, v).
+    2. Determina el eje circunferencial (ángulo theta) y el eje radial (radio r).
+    3. Mapea cada vértice/loop a coordenadas polares (r, theta) sin cruces ni distorsiones.
+    """
+    if not island_faces:
+        return
+
+    # 1. Asegurar que las caras estén organizadas en una grilla ortogonal continua
+    rectify_connected_island_grid(
+        island_faces=island_faces,
+        uv_layer=uv_layer,
+        shape_mode='SQUARE',
+        active_face=active_face,
+    )
+
+    loops = [l for f in island_faces for l in f.loops]
+    if not loops:
+        return
+
+    coords = [l[uv_layer].uv for l in loops]
+    min_u = min(c.x for c in coords)
+    max_u = max(c.x for c in coords)
+    min_v = min(c.y for c in coords)
+    max_v = max(c.y for c in coords)
+
+    w = max_u - min_u
+    h = max_v - min_v
+
+    # Determinar si la circunferencia es horizontal (U) o vertical (V)
+    is_u_circumference = (w >= h)
+    len_circ = max(w if is_u_circumference else h, 1e-4)
+    len_rad = max(h if is_u_circumference else w, 1e-4)
+
+    # Parámetros del círculo y canvas
+    if fit_to_canvas:
+        center_u = 0.5
+        center_v = 0.5
+        max_r = max(0.5 - canvas_margin, 0.05)
+    else:
+        center_u = (min_u + max_u) * 0.5
+        center_v = (min_v + max_v) * 0.5
+        max_r = max((w + h) * 0.25, 0.05)
+
+    if circle_mode == 'DISC':
+        min_r = 0.0
+    else:
+        min_r = max_r * max(min(inner_radius_ratio, 0.95), 0.0)
+
+    start_rad = math.radians(start_angle)
+    span_rad = math.radians(span_angle)
+
+    for l in loops:
+        uv = l[uv_layer].uv
+        if is_u_circumference:
+            t_angle = (uv.x - min_u) / len_circ
+            t_radius = (uv.y - min_v) / len_rad
+        else:
+            t_angle = (uv.y - min_v) / len_circ
+            t_radius = (uv.x - min_u) / len_rad
+
+        theta = start_rad + t_angle * span_rad
+        r = min_r + t_radius * (max_r - min_r)
+
+        l[uv_layer].uv = Vector((
+            center_u + r * math.cos(theta),
+            center_v + r * math.sin(theta)
+        ))
+
+
 # =========================================================================
 # Operadores de Blender
 # =========================================================================
@@ -618,6 +700,143 @@ class UV_OT_fit_to_canvas(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class UV_OT_quad_to_circle(bpy.types.Operator):
+    """Transforma las caras quad seleccionadas en un círculo o anillo concéntrico perfecto en el UV Editor"""
+    bl_idname = "uv.quad_to_circle"
+    bl_label = "Convertir a Círculo UV"
+    bl_description = "Organiza las caras quad seleccionadas en un círculo perfecto o anillo concéntrico radial"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    circle_mode: bpy.props.EnumProperty(
+        name="Tipo de Círculo",
+        description="Elige entre anillo abierto con agujero interior o disco relleno continuo hasta el centro",
+        items=[
+            ('ANNULUS', "Anillo / Arandela", "Distribuye las caras en un anillo con radio interior y exterior"),
+            ('DISC', "Disco Completo", "Círculo relleno continuo hasta el centro (radio interior = 0)"),
+        ],
+        default='ANNULUS',
+    )
+
+    inner_radius_ratio: bpy.props.FloatProperty(
+        name="Radio Interior",
+        description="Proporción del radio interior respecto al radio exterior (0 = cerrado, 0.5 = mitad)",
+        default=0.35,
+        min=0.0,
+        max=0.9,
+        precision=2,
+    )
+
+    start_angle: bpy.props.FloatProperty(
+        name="Ángulo Inicial",
+        description="Rotación inicial del círculo en grados",
+        default=0.0,
+        min=-360.0,
+        max=360.0,
+        precision=1,
+    )
+
+    span_angle: bpy.props.FloatProperty(
+        name="Ángulo de Barrido",
+        description="Extensión angular del arco (360° para círculo completo)",
+        default=360.0,
+        min=10.0,
+        max=360.0,
+        precision=1,
+    )
+
+    fit_to_canvas: bpy.props.BoolProperty(
+        name="Ajustar al Canvas (0-1)",
+        description="Centra y escala el círculo dentro del canvas [0, 1]",
+        default=True,
+    )
+
+    canvas_margin: bpy.props.FloatProperty(
+        name="Margen de Canvas",
+        description="Margen respecto a los bordes del canvas [0, 1]",
+        default=0.02,
+        min=0.0,
+        max=0.4,
+        precision=3,
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return (
+            context.mode == 'EDIT_MESH'
+            and context.space_data is not None
+            and context.space_data.type == 'IMAGE_EDITOR'
+        )
+
+    def execute(self, context):
+        is_sync = context.scene.tool_settings.use_uv_select_sync
+
+        edit_objects = [obj for obj in context.objects_in_mode if obj.type == 'MESH']
+        if not edit_objects and context.active_object and context.active_object.type == 'MESH':
+            edit_objects = [context.active_object]
+
+        if not edit_objects:
+            self.report({'WARNING'}, "No hay mallas activas en modo edición.")
+            return {'CANCELLED'}
+
+        total_quads = 0
+        total_ignored = 0
+        total_islands = 0
+
+        for obj in edit_objects:
+            bm = bmesh.from_edit_mesh(obj.data)
+            uv_layer = bm.loops.layers.uv.verify()
+
+            selected_quads, ignored = get_selected_quads(bm, uv_layer, is_sync)
+            total_ignored += ignored
+
+            if not selected_quads:
+                continue
+
+            active_face = bm.faces.active if bm.faces.active in selected_quads else None
+
+            islands = get_connected_islands(selected_quads, uv_layer)
+            total_islands += len(islands)
+
+            for island in islands:
+                transform_island_to_circle(
+                    island_faces=island,
+                    uv_layer=uv_layer,
+                    circle_mode=self.circle_mode,
+                    inner_radius_ratio=self.inner_radius_ratio,
+                    start_angle=self.start_angle,
+                    span_angle=self.span_angle,
+                    fit_to_canvas=self.fit_to_canvas,
+                    canvas_margin=self.canvas_margin,
+                    active_face=active_face,
+                )
+
+            # Si hay múltiples islas y fit_to_canvas está activo, empaquetar en estantes para evitar superposiciones
+            if self.fit_to_canvas and len(islands) > 1:
+                pack_islands_to_canvas(
+                    islands=islands,
+                    uv_layer=uv_layer,
+                    margin=self.canvas_margin,
+                    spacing=0.02,
+                )
+
+            bmesh.update_edit_mesh(obj.data)
+            total_quads += len(selected_quads)
+
+        if total_quads == 0:
+            self.report({'WARNING'}, f"No se procesaron quads. Caras no-quad ignoradas: {total_ignored}.")
+            return {'CANCELLED'}
+
+        msg = f"Círculo UV: {total_quads} quads organizados en {total_islands} círculo(s)/anillo(s)"
+        if self.fit_to_canvas:
+            msg += " centrados en el canvas [0, 1]"
+        msg += "."
+        if total_ignored > 0:
+            msg += f" ({total_ignored} caras no-quad ignoradas)."
+        self.report({'INFO'}, msg)
+
+        return {'FINISHED'}
+
+
 # =========================================================================
 # Panel de Interfaz de Usuario
 # =========================================================================
@@ -677,7 +896,26 @@ class UV_PT_quad_rectifier(bpy.types.Panel):
 
         layout.separator()
 
-        # Sección 2: Ajuste Dedicado al Canvas (Empaquetar sin montarse)
+        # Sección 2: Topología Circular / Anillos UV
+        box_circ = layout.box()
+        box_circ.label(text="Topología Circular / Anillos UV:", icon='FORCE_VORTEX')
+        col_circ = box_circ.column(align=True)
+
+        op_ann = col_circ.operator("uv.quad_to_circle", text="Convertir a Anillo UV", icon='SPHERE')
+        op_ann.circle_mode = 'ANNULUS'
+        op_ann.fit_to_canvas = True
+
+        op_disc = col_circ.operator("uv.quad_to_circle", text="Convertir a Disco (Cerrado)", icon='MESH_CIRCLE')
+        op_disc.circle_mode = 'DISC'
+        op_disc.fit_to_canvas = True
+
+        op_unroll = col_circ.operator("uv.quad_rectifier", text="Desenrollar Anillo a Grilla", icon='SNAP_EDGE')
+        op_unroll.shape_mode = 'SQUARE'
+        op_unroll.fit_to_canvas = True
+
+        layout.separator()
+
+        # Sección 3: Ajuste Dedicado al Canvas (Empaquetar sin montarse)
         box_canvas = layout.box()
         box_canvas.label(text="Ajuste al Canvas [0, 1]:", icon='IMAGE_PLANE')
         box_canvas.label(text="Acomoda las islas sin que se monten:")
@@ -686,7 +924,7 @@ class UV_PT_quad_rectifier(bpy.types.Panel):
 
         layout.separator()
 
-        # Sección 3: Autoría y Enlaces Oficiales
+        # Sección 4: Autoría y Enlaces Oficiales
         box_author = layout.box()
         b_row = box_author.row(align=True)
         b_row.label(text=f"Dev: {_ADDON_INFO['author']}", icon='USER')
@@ -705,6 +943,7 @@ class UV_PT_quad_rectifier(bpy.types.Panel):
 classes = (
     UV_OT_quad_rectifier,
     UV_OT_fit_to_canvas,
+    UV_OT_quad_to_circle,
     UV_PT_quad_rectifier,
 )
 

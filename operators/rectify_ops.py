@@ -6,6 +6,7 @@ from ..core.rectifier import (
     get_connected_islands,
     rectify_connected_island_grid,
     pack_islands_to_canvas,
+    transform_island_to_circle,
     is_loop_uv_selected,
 )
 
@@ -206,3 +207,141 @@ class UV_OT_fit_to_canvas(bpy.types.Operator):
 
         self.report({'INFO'}, f"{total_islands} isla(s) UV acomodada(s) al canvas [0, 1] sin superposiciones.")
         return {'FINISHED'}
+
+
+class UV_OT_quad_to_circle(bpy.types.Operator):
+    """Transforma las caras quad seleccionadas en un círculo o anillo concéntrico perfecto en el UV Editor"""
+    bl_idname = "uv.quad_to_circle"
+    bl_label = "Convertir a Círculo UV"
+    bl_description = "Organiza las caras quad seleccionadas en un círculo perfecto o anillo concéntrico radial"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    circle_mode: bpy.props.EnumProperty(
+        name="Tipo de Círculo",
+        description="Elige entre anillo abierto con agujero interior o disco relleno continuo hasta el centro",
+        items=[
+            ('ANNULUS', "Anillo / Arandela", "Distribuye las caras en un anillo con radio interior y exterior"),
+            ('DISC', "Disco Completo", "Círculo relleno continuo hasta el centro (radio interior = 0)"),
+        ],
+        default='ANNULUS',
+    )
+
+    inner_radius_ratio: bpy.props.FloatProperty(
+        name="Radio Interior",
+        description="Proporción del radio interior respecto al radio exterior (0 = cerrado, 0.5 = mitad)",
+        default=0.35,
+        min=0.0,
+        max=0.9,
+        precision=2,
+    )
+
+    start_angle: bpy.props.FloatProperty(
+        name="Ángulo Inicial",
+        description="Rotación inicial del círculo en grados",
+        default=0.0,
+        min=-360.0,
+        max=360.0,
+        precision=1,
+    )
+
+    span_angle: bpy.props.FloatProperty(
+        name="Ángulo de Barrido",
+        description="Extensión angular del arco (360° para círculo completo)",
+        default=360.0,
+        min=10.0,
+        max=360.0,
+        precision=1,
+    )
+
+    fit_to_canvas: bpy.props.BoolProperty(
+        name="Ajustar al Canvas (0-1)",
+        description="Centra y escala el círculo dentro del canvas [0, 1]",
+        default=True,
+    )
+
+    canvas_margin: bpy.props.FloatProperty(
+        name="Margen de Canvas",
+        description="Margen respecto a los bordes del canvas [0, 1]",
+        default=0.02,
+        min=0.0,
+        max=0.4,
+        precision=3,
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return (
+            context.mode == 'EDIT_MESH'
+            and context.space_data is not None
+            and context.space_data.type == 'IMAGE_EDITOR'
+        )
+
+    def execute(self, context):
+        is_sync = context.scene.tool_settings.use_uv_select_sync
+
+        edit_objects = [obj for obj in context.objects_in_mode if obj.type == 'MESH']
+        if not edit_objects and context.active_object and context.active_object.type == 'MESH':
+            edit_objects = [context.active_object]
+
+        if not edit_objects:
+            self.report({'WARNING'}, "No hay mallas activas en modo edición.")
+            return {'CANCELLED'}
+
+        total_quads = 0
+        total_ignored = 0
+        total_islands = 0
+
+        for obj in edit_objects:
+            bm = bmesh.from_edit_mesh(obj.data)
+            uv_layer = bm.loops.layers.uv.verify()
+
+            selected_quads, ignored = get_selected_quads(bm, uv_layer, is_sync)
+            total_ignored += ignored
+
+            if not selected_quads:
+                continue
+
+            active_face = bm.faces.active if bm.faces.active in selected_quads else None
+
+            islands = get_connected_islands(selected_quads, uv_layer)
+            total_islands += len(islands)
+
+            for island in islands:
+                transform_island_to_circle(
+                    island_faces=island,
+                    uv_layer=uv_layer,
+                    circle_mode=self.circle_mode,
+                    inner_radius_ratio=self.inner_radius_ratio,
+                    start_angle=self.start_angle,
+                    span_angle=self.span_angle,
+                    fit_to_canvas=self.fit_to_canvas,
+                    canvas_margin=self.canvas_margin,
+                    active_face=active_face,
+                )
+
+            # Si hay múltiples islas y fit_to_canvas está activo, empaquetar en estantes para evitar superposiciones
+            if self.fit_to_canvas and len(islands) > 1:
+                pack_islands_to_canvas(
+                    islands=islands,
+                    uv_layer=uv_layer,
+                    margin=self.canvas_margin,
+                    spacing=0.02,
+                )
+
+            bmesh.update_edit_mesh(obj.data)
+            total_quads += len(selected_quads)
+
+        if total_quads == 0:
+            self.report({'WARNING'}, f"No se procesaron quads. Caras no-quad ignoradas: {total_ignored}.")
+            return {'CANCELLED'}
+
+        msg = f"Círculo UV: {total_quads} quads organizados en {total_islands} círculo(s)/anillo(s)"
+        if self.fit_to_canvas:
+            msg += " centrados en el canvas [0, 1]"
+        msg += "."
+        if total_ignored > 0:
+            msg += f" ({total_ignored} caras no-quad ignoradas)."
+        self.report({'INFO'}, msg)
+
+        return {'FINISHED'}
+

@@ -58,7 +58,26 @@ class UV_PT_quad_rectifier(bpy.types.Panel):
 
         layout.separator()
 
-        # Sección 2: Ajuste Dedicado al Canvas [0, 1]
+        # Sección 2: Topología Circular / Anillos UV
+        box_circ = layout.box()
+        box_circ.label(text="Topología Circular / Anillos UV:", icon='FORCE_VORTEX')
+        col_circ = box_circ.column(align=True)
+
+        op_ann = col_circ.operator("uv.quad_to_circle", text="Convertir a Anillo UV", icon='SPHERE')
+        op_ann.circle_mode = 'ANNULUS'
+        op_ann.fit_to_canvas = True
+
+        op_disc = col_circ.operator("uv.quad_to_circle", text="Convertir a Disco (Cerrado)", icon='MESH_CIRCLE')
+        op_disc.circle_mode = 'DISC'
+        op_disc.fit_to_canvas = True
+
+        op_unroll = col_circ.operator("uv.quad_rectifier", text="Desenrollar Anillo a Grilla", icon='SNAP_EDGE')
+        op_unroll.shape_mode = 'SQUARE'
+        op_unroll.fit_to_canvas = True
+
+        layout.separator()
+
+        # Sección 3: Ajuste Dedicado al Canvas [0, 1]
         box_canvas = layout.box()
         box_canvas.label(text="Ajuste al Canvas [0, 1]:", icon='IMAGE_PLANE')
         col_c = box_canvas.column(align=True)
@@ -66,7 +85,7 @@ class UV_PT_quad_rectifier(bpy.types.Panel):
 
         layout.separator()
 
-        # Sección 3: Autoría y Enlaces Oficiales
+        # Sección 4: Autoría y Enlaces Oficiales
         box_author = layout.box()
         b_row = box_author.row(align=True)
         b_row.label(text=f"Dev: {_ADDON_INFO['author']}", icon='USER')

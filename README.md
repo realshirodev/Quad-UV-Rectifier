@@ -13,7 +13,11 @@
 ## ✨ Características Principales
 
 - 🔗 **Cuadrícula Continua Conectada (Sin Huecos ni Márgenes)**: Propaga fila por fila y columna por columna a través de las aristas compartidas en BMesh, garantizando que las caras adyacentes compartan exactamente las mismas coordenadas UV en sus bordes comunes.
-- 🖼️ **Ajuste Automático al Canvas [0.0, 1.0]**: Escala y centra uniformemente la cuadrícula resultante dentro del espacio $[0, 1]$ de la textura con margen configurable (por defecto 2%), manteniendo cuadrados perfectos 1:1 o proporciones rectangulares exactas.
+- ⭕ **Soporte Completo para UV Circulares y Anillos**:
+  - **Convertir a Anillo UV**: Transforma islas de quads en anillos concéntricos perfectos con control de radio interior (`inner_radius_ratio`), ángulo inicial y barrido.
+  - **Convertir a Disco (Cerrado)**: Distribuye quads en círculos continuos rellenos hasta el centro.
+  - **Desenrollar Anillos a Grilla**: Desenrolla limpiamente tubos, cilindros y arandelas circulares en una cuadrícula plana recta ortogonal sin desalineaciones diagonales.
+- 🖼️ **Ajuste y Empaquetado al Canvas [0.0, 1.0] (Shelf Bin Packing)**: Empaqueta islas en estantes y las escala dentro del espacio $[0, 1]$ de la textura con margen y espaciado de seguridad para que **nunca se monten una encima de otra**.
 - 📐 **Geometría Ortogonal Estricta**: Cada celda se transforma en un rectángulo o cuadrado 1:1 con ángulos rectos de $90^\circ$ ($\Delta V = 0$ en aristas horizontales y $\Delta U = 0$ en aristas verticales).
 - 🔄 **Topología Anti-Bowtie Matemática**: Ordena los loops perimetrales en sentido antihorario (CCW) respecto al centroide de la cara para evitar inversiones, diagonales cruzadas y caras retorcidas.
 - 🎯 **Soporte UV Sync Selection**: Detección robusta de caras quad seleccionadas tanto con **UV Sync Selection** activado (`ON`) como desactivado (`OFF`), sin alterar jamás caras adyacentes no seleccionadas.

@@ -1,10 +1,10 @@
 _ADDON_INFO = {
     "name": "Quad UV Rectifier",
     "author": "ShiroDev",
-    "version": (1, 5, 0),
+    "version": (1, 6, 0),
     "blender": (4, 0, 0),
     "location": "UV Editor > Barra Lateral (N) > pestaña 'UV Square'",
-    "description": "Endereza caras quad en una cuadrícula continua ortogonal conectada y acomoda al canvas [0, 1] sin montarse.",
+    "description": "Endereza caras quad en cuadrículas continuas, convierte a círculos/anillos concéntricos y acomoda al canvas [0, 1].",
     "category": "UV",
     "doc_url": "https://teamapricot.com",
     "website": "https://teamapricot.com",

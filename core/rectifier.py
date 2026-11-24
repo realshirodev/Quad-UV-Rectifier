@@ -366,3 +366,86 @@ def rectify_connected_island_grid(island_faces, uv_layer, shape_mode='SQUARE', a
 
     for loop, target in target_uvs.items():
         loop[uv_layer].uv = target
+
+
+def transform_island_to_circle(
+    island_faces,
+    uv_layer,
+    circle_mode='ANNULUS',
+    inner_radius_ratio=0.35,
+    start_angle=0.0,
+    span_angle=360.0,
+    fit_to_canvas=True,
+    canvas_margin=0.02,
+    active_face=None,
+):
+    """
+    Transforma una isla de quads en un círculo concéntrico o anillo radial perfecto en UV space.
+    1. Rectifica la isla en una cuadrícula continua ortogonal paramétrica (u, v).
+    2. Determina el eje circunferencial (ángulo theta) y el eje radial (radio r).
+    3. Mapea cada vértice/loop a coordenadas polares (r, theta) sin cruces ni distorsiones.
+    """
+    if not island_faces:
+        return
+
+    # 1. Asegurar que las caras estén organizadas en una grilla ortogonal continua
+    rectify_connected_island_grid(
+        island_faces=island_faces,
+        uv_layer=uv_layer,
+        shape_mode='SQUARE',
+        active_face=active_face,
+    )
+
+    loops = [l for f in island_faces for l in f.loops]
+    if not loops:
+        return
+
+    coords = [l[uv_layer].uv for l in loops]
+    min_u = min(c.x for c in coords)
+    max_u = max(c.x for c in coords)
+    min_v = min(c.y for c in coords)
+    max_v = max(c.y for c in coords)
+
+    w = max_u - min_u
+    h = max_v - min_v
+
+    # Determinar si la circunferencia es horizontal (U) o vertical (V)
+    is_u_circumference = (w >= h)
+    len_circ = max(w if is_u_circumference else h, 1e-4)
+    len_rad = max(h if is_u_circumference else w, 1e-4)
+
+    # Parámetros del círculo y canvas
+    if fit_to_canvas:
+        center_u = 0.5
+        center_v = 0.5
+        max_r = max(0.5 - canvas_margin, 0.05)
+    else:
+        center_u = (min_u + max_u) * 0.5
+        center_v = (min_v + max_v) * 0.5
+        max_r = max((w + h) * 0.25, 0.05)
+
+    if circle_mode == 'DISC':
+        min_r = 0.0
+    else:
+        min_r = max_r * max(min(inner_radius_ratio, 0.95), 0.0)
+
+    start_rad = math.radians(start_angle)
+    span_rad = math.radians(span_angle)
+
+    for l in loops:
+        uv = l[uv_layer].uv
+        if is_u_circumference:
+            t_angle = (uv.x - min_u) / len_circ
+            t_radius = (uv.y - min_v) / len_rad
+        else:
+            t_angle = (uv.y - min_v) / len_circ
+            t_radius = (uv.x - min_u) / len_rad
+
+        theta = start_rad + t_angle * span_rad
+        r = min_r + t_radius * (max_r - min_r)
+
+        l[uv_layer].uv = Vector((
+            center_u + r * math.cos(theta),
+            center_v + r * math.sin(theta)
+        ))
+
