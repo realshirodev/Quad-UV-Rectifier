@@ -1,11 +1,14 @@
 _ADDON_INFO = {
     "name": "Quad UV Rectifier",
     "author": "ShiroDev",
-    "version": (1, 0, 0),
+    "version": (1, 3, 0),
     "blender": (4, 0, 0),
     "location": "UV Editor > Barra Lateral (N) > pestaña 'UV Square'",
-    "description": "Endereza caras quad en UV a cuadrículas limpias sin diagonales ni autointersecciones",
+    "description": "Endereza caras quad en una cuadrícula continua ortogonal conectada, sin diagonales, huecos ni cruces.",
     "category": "UV",
+    "doc_url": "https://teamapricot.com",
+    "website": "https://teamapricot.com",
+    "youtube_channel": "https://www.youtube.com/@shiro_dev",
 }
 
 # Diccionario bl_info para compatibilidad con versiones legacy de Blender (4.0 - 4.1)
@@ -24,7 +27,6 @@ if "bpy" in locals():
                 pass
 
 import bpy
-from .properties import register_properties, unregister_properties
 from .operators import operator_classes
 from .ui.panel import UV_PT_quad_rectifier
 
@@ -34,15 +36,11 @@ classes = operator_classes + (
 
 
 def register():
-    register_properties()
-
     for cls in classes:
         bpy.utils.register_class(cls)
 
 
 def unregister():
-    unregister_properties()
-
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
 

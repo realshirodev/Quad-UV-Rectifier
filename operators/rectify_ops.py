@@ -3,66 +3,26 @@ import bpy
 import bmesh
 from ..core.rectifier import (
     get_selected_quads,
-    rectify_in_place,
-    pack_in_grid_layout,
+    get_connected_islands,
+    rectify_connected_island_grid,
 )
 
 
 class UV_OT_quad_rectifier(bpy.types.Operator):
-    """Endereza caras quad seleccionadas sin diagonales ni cruces"""
+    """Endereza caras quad seleccionadas en una cuadrícula continua ortogonal sin huecos ni diagonales"""
     bl_idname = "uv.quad_rectifier"
-    bl_label = "Enderezar Quads UV"
-    bl_description = "Endereza caras quad en el editor UV a cuadrados o rectángulos limpios"
+    bl_label = "Enderezar Cuadrícula UV"
+    bl_description = "Alinea y une caras quad seleccionadas en una cuadrícula continua ortogonal perfecta sin huecos"
     bl_options = {'REGISTER', 'UNDO'}
 
-    action_mode: bpy.props.EnumProperty(
-        name="Modo de Operación",
-        description="Elige entre enderezar en su lugar o acomodar en cuadrícula sin superposiciones",
-        items=[
-            ('IN_PLACE', "En su Lugar", "Endereza cada quad en su propia ubicación"),
-            ('GRID_PACK', "Acomodar Cuadrícula", "Acomoda todas las caras en una grilla ordenada (ideal para anillos/abanicos/superposiciones)"),
-        ],
-        default='IN_PLACE',
-    )
-
     shape_mode: bpy.props.EnumProperty(
-        name="Forma",
-        description="Proporción del resultado",
+        name="Forma de Celda",
+        description="Elige entre celdas cuadradas perfectas o mantener proporción rectangular",
         items=[
-            ('RECTANGLE', "Rectangular", "Mantiene las proporciones ancho/alto"),
-            ('SQUARE', "Cuadrado (1:1)", "Fuerza cuadrados perfectos con proporción 1:1"),
+            ('SQUARE', "Cuadrado (1:1)", "Fuerza cada celda de la cuadrícula a un cuadrado perfecto 1:1"),
+            ('RECTANGLE', "Rectangular", "Mantiene las proporciones ancho/alto de las celdas"),
         ],
-        default='RECTANGLE',
-    )
-
-    weld_shared_corners: bpy.props.BoolProperty(
-        name="Soldar Esquinas Adyacentes",
-        description="Promedia las esquinas compartidas entre quads vecinos para una grilla continua",
-        default=True,
-    )
-
-    use_snap: bpy.props.BoolProperty(
-        name="Ajustar a Cuadrícula (Snap)",
-        description="Ajusta las coordenadas UV a pasos regulares de cuadrícula",
-        default=False,
-    )
-
-    snap_step: bpy.props.FloatProperty(
-        name="Paso de Cuadrícula",
-        description="Tamaño de paso para el snap (ej. 0.0625 = 1/16, 0.03125 = 1/32)",
-        default=0.0625,
-        min=0.0001,
-        max=1.0,
-        precision=4,
-    )
-
-    grid_padding: bpy.props.FloatProperty(
-        name="Espaciado (Padding)",
-        description="Espacio relativo entre celdas al acomodar en cuadrícula",
-        default=0.05,
-        min=0.0,
-        max=0.5,
-        precision=3,
+        default='SQUARE',
     )
 
     @classmethod
@@ -86,6 +46,7 @@ class UV_OT_quad_rectifier(bpy.types.Operator):
 
         total_quads = 0
         total_ignored = 0
+        total_islands = 0
 
         for obj in edit_objects:
             bm = bmesh.from_edit_mesh(obj.data)
@@ -97,21 +58,17 @@ class UV_OT_quad_rectifier(bpy.types.Operator):
             if not selected_quads:
                 continue
 
-            if self.action_mode == 'GRID_PACK':
-                pack_in_grid_layout(
-                    selected_quads=selected_quads,
+            active_face = bm.faces.active if bm.faces.active in selected_quads else None
+
+            islands = get_connected_islands(selected_quads, uv_layer)
+            total_islands += len(islands)
+
+            for island in islands:
+                rectify_connected_island_grid(
+                    island_faces=island,
                     uv_layer=uv_layer,
                     shape_mode=self.shape_mode,
-                    padding_factor=self.grid_padding,
-                )
-            else:
-                rectify_in_place(
-                    selected_quads=selected_quads,
-                    uv_layer=uv_layer,
-                    shape_mode=self.shape_mode,
-                    weld_shared=self.weld_shared_corners,
-                    use_snap=self.use_snap,
-                    snap_step=self.snap_step,
+                    active_face=active_face,
                 )
 
             bmesh.update_edit_mesh(obj.data)
@@ -120,11 +77,11 @@ class UV_OT_quad_rectifier(bpy.types.Operator):
         if total_quads == 0:
             self.report(
                 {'WARNING'},
-                f"No se procesó ningún quad. Caras no-quad ignoradas: {total_ignored}."
+                f"No se procesaron quads. Caras no-quad ignoradas: {total_ignored}."
             )
             return {'CANCELLED'}
 
-        msg = f"Quad UV Rectifier: {total_quads} caras quad procesadas con éxito."
+        msg = f"Quad UV Rectifier: {total_quads} quads unidos en {total_islands} cuadrícula(s) continua(s)."
         if total_ignored > 0:
             msg += f" ({total_ignored} caras no-quad ignoradas)."
         self.report({'INFO'}, msg)

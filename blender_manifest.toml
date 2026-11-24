@@ -1,17 +1,18 @@
 schema_version = "1.0.0"
 
 id = "quad_uv_rectifier"
-version = "1.0.0"
+version = "1.3.0"
 name = "Quad UV Rectifier"
-tagline = "Endereza caras quad en UV a cuadrículas limpias (cuadrados o rectángulos) sin diagonales ni autointersecciones"
-maintainer = "ShiroDev"
+tagline = "Endereza caras quad en UV a cuadrículas continuas ortogonales sin diagonales, huecos ni cruces"
+maintainer = "ShiroDev <https://www.youtube.com/@shiro_dev>"
 type = "add-on"
 
 blender_version_min = "4.0.0"
 license = [
-    "SPDX:GPL-3.0-or-later",
+    "SPDX:MIT",
 ]
 
+website = "https://teamapricot.com"
 tags = ["UV", "Modeling", "Mesh"]
 
 permissions = []
